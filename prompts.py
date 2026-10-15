@@ -1,26 +1,36 @@
-from tools.file_search import ls_tool_schema, read_tool_schema
+from tools import ls_tool_schema, read_tool_schema
+
+_JSON_TYPES = {"str": "string", "int": "integer", "bool": "boolean"}
 
 
-def _render_schema(s: dict) -> str:
-    """Render a tool schema dict into a human-readable string for the system prompt."""
-    lines = [f"**{s['name']}**: {s['description']}"]
-    for arg_name, meta in s["args"].items():
-        req = "required" if meta["required"] else "optional"
-        lines.append(f"  - `{arg_name}` ({meta['type']}, {req}): {meta['description']}")
-    return "\n".join(lines)
+def _to_openai_tool(s: dict) -> dict:
+    """Convert our tool schema dict into the OpenAI `tools=[...]` format vLLM expects."""
+    return {
+        "type": "function",
+        "function": {
+            "name": s["name"],
+            "description": s["description"],
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    name: {"type": _JSON_TYPES[meta["type"]], "description": meta["description"]}
+                    for name, meta in s["args"].items()
+                },
+                "required": [name for name, meta in s["args"].items() if meta["required"]],
+            },
+        },
+    }
 
 
-_tool_block = "\n\n".join(
-    _render_schema(s)
+# Sent as `tools=` on every request; the model's chat template renders them into the prompt
+# in its native <tool_call> format, and vLLM's tool parser turns its calls into message.tool_calls.
+TOOL_SPECS = [
+    _to_openai_tool(s)
     for s in [ls_tool_schema, read_tool_schema]
-)
+]
 
-SYSTEM_MESSAGE = f"""
+SYSTEM_MESSAGE = """
 You are Sphinx, an autonomous AI agent. You operate in a loop: think, act, observe, repeat — until you can give a complete and accurate final answer.
-
-## Tools
-You have access to the following tools:
-{_tool_block}
 
 ## Reasoning
 Before every response, reason step by step:
@@ -30,19 +40,12 @@ Before every response, reason step by step:
 
 Keep reasoning concise. Do not narrate tool calls — just make them.
 
-## Tool Calling
-When you need to call a tool, respond with exactly:
-<|tool_call|>{{"name": "tool_name", "args": {{"arg1": "value1"}}}}<|tool_call|>
-
-Rules:
-- If a tool takes no arguments, omit the "args" key entirely.
+## Tools
 - Do not predict, hallucinate, or fill in what the tool will return. Wait for the result.
 - If a tool returns an error or unexpected output, reason about it and decide whether to retry, try a different tool, or answer with what you have.
-
-Tool results will be returned as:
-<|tool_call_result|>result here<|tool_call_result|>
+- When reading a directory, be sure to read it fully.
 
 ## Final Answer
-Once you have enough information to answer fully and accurately, respond with:
+Once you have enough information to answer fully and accurately, respond with no tool calls and:
 <answer>your final answer here</answer>
 """.strip()

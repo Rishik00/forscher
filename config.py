@@ -7,6 +7,7 @@ class ToolCallResult:
 
     args: dict | None
     function_name: str
+    call_id: str | None = None  # id from message.tool_calls, echoed back on the result
 
 
 @dataclass
